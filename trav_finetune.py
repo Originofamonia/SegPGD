@@ -1,3 +1,7 @@
+"""
+Finetune the segmentation model on our traversability dataset
+"""
+
 from tqdm import tqdm
 import network
 import utils
@@ -8,7 +12,7 @@ import numpy as np
 import attacks
 
 from torch.utils import data
-from datasets import VOCSegmentation, Cityscapes
+from datasets import VOCSegmentation, Cityscapes, IndoorTrav
 from utils import ext_transforms as et
 from metrics import StreamSegMetrics
 
@@ -27,10 +31,12 @@ def get_argparser():
     parser = argparse.ArgumentParser()
 
     # Datset Options
-    parser.add_argument("--data_root", type=str, default='/home/qiyuan/2023spring/superpixel-align/data/cityscapes/',
+    parser.add_argument("--data_root", type=str, default='/home/qiyuan/2023spring/segmentation_indoor_images',
                         help="path to Dataset")
-    parser.add_argument("--dataset", type=str, default='cityscapes',
-                        choices=['voc', 'cityscapes'], help='Name of dataset')
+    parser.add_argument("--dataset", type=str, default='trav',
+                        choices=['voc', 'cityscapes', 'trav'], help='Name of dataset')
+    parser.add_argument("--scenes", type=list, default=['elb', 'erb', 'uc', 'woh'],
+                        choices=['elb', 'erb', 'uc', 'nh', 'woh'], help='Name of dataset')
     parser.add_argument("--num_classes", type=int, default=None,
                         help="num classes (default: None)")
 
@@ -62,7 +68,7 @@ def get_argparser():
                         help='batch size (default: 16)')
     parser.add_argument("--val_batch_size", type=int, default=2,
                         help='batch size for validation (default: 4)')
-    parser.add_argument("--crop_size", type=int, default=513)
+    parser.add_argument("--crop_size", type=int, default=480)
 
     parser.add_argument("--ckpt", default='checkpoints/best_deeplabv3plus_resnet101_cityscapes_os16.pth.tar',
                         type=str, help="restore from checkpoint")
@@ -102,57 +108,29 @@ def get_argparser():
 def get_dataset(opts):
     """ Dataset And Augmentation
     """
-    if opts.dataset == 'voc':
-        train_transform = et.ExtCompose([
-            # et.ExtResize(size=opts.crop_size),
-            et.ExtRandomScale((0.5, 2.0)),
-            et.ExtRandomCrop(size=(opts.crop_size, opts.crop_size), pad_if_needed=True),
-            et.ExtRandomHorizontalFlip(),
-            et.ExtToTensor(),
-            et.ExtNormalize(mean=[0.485, 0.456, 0.406],
-                            std=[0.229, 0.224, 0.225]),
-        ])
-        if opts.crop_val:
-            val_transform = et.ExtCompose([
-                et.ExtResize(opts.crop_size),
-                et.ExtCenterCrop(opts.crop_size),
-                et.ExtToTensor(),
-                et.ExtNormalize(mean=[0.485, 0.456, 0.406],
-                                std=[0.229, 0.224, 0.225]),
-            ])
-        else:
-            val_transform = et.ExtCompose([
-                et.ExtToTensor(),
-                et.ExtNormalize(mean=[0.485, 0.456, 0.406],
-                                std=[0.229, 0.224, 0.225]),
-            ])
-        train_dst = VOCSegmentation(root=opts.data_root, year=opts.year,
-                                    image_set='train', download=opts.download, transform=train_transform)
-        val_dst = VOCSegmentation(root=opts.data_root, year=opts.year,
-                                  image_set='val', download=False, transform=val_transform)
-
-    if opts.dataset == 'cityscapes':
+    if opts.dataset == 'trav':
         train_transform = et.ExtCompose([
             # et.ExtResize( 512 ),
             et.ExtRandomCrop(size=(opts.crop_size, opts.crop_size)),
             et.ExtColorJitter(brightness=0.5, contrast=0.5, saturation=0.5),
             et.ExtRandomHorizontalFlip(),
             et.ExtToTensor(),
-            et.ExtNormalize(mean=[0.485, 0.456, 0.406],
-                            std=[0.229, 0.224, 0.225]),
+            et.ExtNormalize(mean=[0.5174, 0.4857, 0.5054],
+                            std=[0.2726, 0.2778, 0.2861]),
         ])
 
         val_transform = et.ExtCompose([
             # et.ExtResize( 512 ),
             et.ExtToTensor(),
-            et.ExtNormalize(mean=[0.485, 0.456, 0.406],
-                            std=[0.229, 0.224, 0.225]),
+            et.ExtNormalize(mean=[0.5174, 0.4857, 0.5054],
+                            std=[0.2726, 0.2778, 0.2861]),
         ])
 
-        train_dst = Cityscapes(root=opts.data_root,
-                               split='train', transform=train_transform)
-        val_dst = Cityscapes(root=opts.data_root,
-                             split='val', transform=val_transform)
+        train_dst = IndoorTrav(opts.data_root, 'train', opts.scenes,
+                               transform=train_transform)
+        val_dst = IndoorTrav(opts.data_root, 'val', opts.scenes,
+                             transform=val_transform)
+
     return train_dst, val_dst
 
 
@@ -340,6 +318,8 @@ def main():
         opts.num_classes = 21
     elif opts.dataset.lower() == 'cityscapes':
         opts.num_classes = 19
+    elif opts.dataset.lower() == 'trav':
+        opts.num_classes = 19  # after loading the model, change the last MLP's dimension
 
     # Setup visualization
     vis = Visualizer(port=opts.vis_port,
@@ -418,6 +398,8 @@ def main():
         # https://github.com/VainF/DeepLabV3Plus-Pytorch/issues/8#issuecomment-605601402, @PytaichukBohdan
         checkpoint = torch.load(opts.ckpt, map_location=torch.device('cpu'))
         model.load_state_dict(checkpoint["model_state"])
+        # TODO: change class from 19 to 2
+        model.classifier.classifier[-1] = nn.Conv2d(256, 2, 1)
         model = nn.DataParallel(model)
         model.to(device)
         if opts.continue_training:
@@ -436,7 +418,7 @@ def main():
     # ==========   Train Loop   ==========#
     vis_sample_id = np.random.randint(0, len(val_loader), opts.vis_num_samples,
                                       np.int32) if opts.enable_vis else None  # sample idxs for visualization
-    denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # denormalization for ori images
+    denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054], std=[0.2726, 0.2778, 0.2861])  # denormalization for ori images
 
     if opts.test_only:
         model.eval()
@@ -506,13 +488,10 @@ def main():
 #             loss = (1-lamb) * criterion(outputs, labels) + lamb * criterion(new_output, labels)
 #             #
 # =============================================================================
-            
-            
+
             loss =  criterion(outputs, labels)
             loss.backward()
-            
-            # e
-            
+
             optimizer.step()
 
             np_loss = loss.detach().cpu().numpy()

@@ -8,9 +8,7 @@ import numpy as np
 from PIL import Image
 
 
-#
-#  Extended Transforms for Semantic Segmentation
-#
+# Extended Transforms for Semantic Segmentation
 class ExtRandomHorizontalFlip(object):
     """Horizontally flip the given PIL Image randomly with a given probability.
     Args:

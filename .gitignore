@@ -4,6 +4,8 @@ checkpoints
 .vscode
 *.pyc
 .idea/
+.ipynb_checkpoints
+checkpoints
 __pycache__
 results
 checkpoints_bak

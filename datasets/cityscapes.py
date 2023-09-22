@@ -60,10 +60,10 @@ class Cityscapes(data.Dataset):
         CityscapesClass('license plate',        -1, 255, 'vehicle', 7, False, True, (0, 0, 142)),
     ]
 
-    train_id_to_color = [c.color for c in classes if (c.train_id != -1 and c.train_id != 255)]
+    train_id_to_color = [c.color for c in classes if (c.train_id != -1 and c.train_id != 255)]  # [20,3] array of colors
     train_id_to_color.append([0, 0, 0])
     train_id_to_color = np.array(train_id_to_color)
-    id_to_train_id = np.array([c.train_id for c in classes])
+    id_to_train_id = np.array([c.train_id for c in classes])  # [35] list
     
     #train_id_to_color = [(0, 0, 0), (128, 64, 128), (70, 70, 70), (153, 153, 153), (107, 142, 35),
     #                      (70, 130, 180), (220, 20, 60), (0, 0, 142)]
@@ -119,7 +119,10 @@ class Cityscapes(data.Dataset):
             tuple: (image, target) where target is a tuple of all target types if target_type is a list with more
             than one item. Otherwise target is a json object if target_type="polygon", else the image segmentation.
         """
-        image = Image.open(self.images[index]).convert('RGB')
+        try:
+            image = Image.open(self.images[index]).convert('RGB')
+        except IOError:
+            print(f'Cannot open image: {self.images[index]}')
         target = Image.open(self.targets[index])
         if self.transform:
             image, target = self.transform(image, target)

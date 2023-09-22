@@ -1,4 +1,7 @@
-from torch.utils.data import dataset
+"""
+Only infer segmentations, no attack
+"""
+# from torch.utils.data import dataset
 from tqdm import tqdm
 import network
 import utils
@@ -8,7 +11,7 @@ import argparse
 import numpy as np
 
 from torch.utils import data
-from datasets import VOCSegmentation, Cityscapes, cityscapes
+from datasets import VOCSegmentation, Cityscapes
 from torchvision import transforms as T
 from metrics import StreamSegMetrics
 
@@ -16,17 +19,19 @@ import torch
 import torch.nn as nn
 
 from PIL import Image
-import matplotlib
+# import matplotlib
 import matplotlib.pyplot as plt
 from glob import glob
+
 
 def get_argparser():
     parser = argparse.ArgumentParser()
 
     # Datset Options
-    parser.add_argument("--input", type=str, required=True,
+    parser.add_argument("--input", type=str, 
+                        default='/home/qiyuan/2023spring/superpixel-align/data/cityscapes/leftImg8bit/train/bremen/bremen_000000_000019_leftImg8bit.png',
                         help="path to a single image or image directory")
-    parser.add_argument("--dataset", type=str, default='voc',
+    parser.add_argument("--dataset", type=str, default='cityscapes',
                         choices=['voc', 'cityscapes'], help='Name of training set')
 
     # Deeplab Options
@@ -35,14 +40,14 @@ def get_argparser():
                               network.modeling.__dict__[name])
                               )
 
-    parser.add_argument("--model", type=str, default='deeplabv3plus_mobilenet',
+    parser.add_argument("--model", type=str, default='deeplabv3plus_resnet101',
                         choices=available_models, help='model name')
     parser.add_argument("--separable_conv", action='store_true', default=False,
                         help="apply separable conv to decoder and aspp")
     parser.add_argument("--output_stride", type=int, default=16, choices=[8, 16])
 
     # Train Options
-    parser.add_argument("--save_val_results_to", default=None,
+    parser.add_argument("--save_val_results_to", default='test_results',
                         help="save segmentation results to the specified dir")
 
     parser.add_argument("--crop_val", action='store_true', default=False,
@@ -50,11 +55,10 @@ def get_argparser():
     parser.add_argument("--val_batch_size", type=int, default=4,
                         help='batch size for validation (default: 4)')
     parser.add_argument("--crop_size", type=int, default=513)
-
     
-    parser.add_argument("--ckpt", default=None, type=str,
+    parser.add_argument("--ckpt", default='checkpoints/best_deeplabv3plus_resnet101_cityscapes_os16.pth.tar', type=str,
                         help="resume from checkpoint")
-    parser.add_argument("--gpu_id", type=str, default='0',
+    parser.add_argument("--gpu_id", type=str, default='0,1',
                         help="GPU ID")
     return parser
 
@@ -118,6 +122,7 @@ def main():
             ])
     if opts.save_val_results_to is not None:
         os.makedirs(opts.save_val_results_to, exist_ok=True)
+
     with torch.no_grad():
         model = model.eval()
         for img_path in tqdm(image_files):
@@ -132,6 +137,8 @@ def main():
             colorized_preds = Image.fromarray(colorized_preds)
             if opts.save_val_results_to:
                 colorized_preds.save(os.path.join(opts.save_val_results_to, img_name+'.png'))
+
+    print('Done')
 
 if __name__ == '__main__':
     main()
