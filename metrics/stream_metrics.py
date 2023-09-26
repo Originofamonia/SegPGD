@@ -1,5 +1,5 @@
 import numpy as np
-from sklearn.metrics import confusion_matrix
+# from sklearn.metrics import confusion_matrix
 
 class _StreamMetrics(object):
     def __init__(self):
@@ -35,7 +35,7 @@ class StreamSegMetrics(_StreamMetrics):
         for lt, lp in zip(label_trues, label_preds):
             self.confusion_matrix += self._fast_hist( lt.flatten(), lp.flatten() )
             self.confusion_matrix_2 += self._class_hist( lt.flatten(), lp.flatten() )
-    
+
     @staticmethod
     def to_str(results):
         string = "\n"
@@ -63,9 +63,6 @@ class StreamSegMetrics(_StreamMetrics):
             minlength=self.n_classes ** 2,
         ).reshape(self.n_classes, self.n_classes)
         return hist
-   
-
-    
 
     def get_results(self):
         """Returns accuracy score evaluation result.

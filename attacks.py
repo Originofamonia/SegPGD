@@ -4,7 +4,6 @@ import numpy as np
 
 import torch
 import torch.nn as nn
-#import caffe
 
 __author__ = 'Anurag Arnab'
 __copyright__ = 'Copyright (c) 2018, Anurag Arnab'
@@ -39,7 +38,7 @@ def fgsm(images,new_images,eps):
     return adversarial_x
 
 
-def pgd(image,new_images,new_labels,eps,model):
+def pgd(image, new_images, new_labels, eps, model):
     
     criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
     Total_iterations = 10
@@ -56,7 +55,7 @@ def pgd(image,new_images,new_labels,eps,model):
     
     return adversarial_x
 
-def segpgd(image,new_images,new_labels,eps,model):
+def segpgd(image, new_images, new_labels, eps, model):
    
    criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
    Total_iterations = 10
@@ -96,7 +95,7 @@ def segpgd(image,new_images,new_labels,eps,model):
            adversarial_x = torch.min(torch.max(new_images_d, new_images - eps*1), new_images + eps*1)
    
    return adversarial_x
-# 
+
 
 def t_fgsm(images,new_images,eps,np_mask):
     r"""Caffe implementation of the Fast Gradient Sign Method.

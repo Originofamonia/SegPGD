@@ -97,7 +97,7 @@ class IndoorTrav(Dataset):
             image, target = self.transform(image, target)
         target = (target / 255).int()
         target = self.encode_target(target)
-        return image, target
+        return image, target, self.images[index]
 
     def __len__(self):
         return len(self.images)

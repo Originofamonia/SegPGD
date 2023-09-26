@@ -1,5 +1,6 @@
 """
-Finetune the segmentation model on our traversability dataset
+1. finetune the segmentation model on our traversability dataset
+2. infer the finetuned 
 """
 
 from tqdm import tqdm
@@ -10,9 +11,11 @@ import random
 import argparse
 import numpy as np
 import attacks
+from pptx import Presentation
+from pptx.util import Inches
 
 from torch.utils import data
-from datasets import VOCSegmentation, Cityscapes, IndoorTrav
+from datasets import IndoorTrav
 from utils import ext_transforms as et
 from metrics import StreamSegMetrics
 
@@ -141,15 +144,15 @@ def validate(opts, model, loader, device, metrics, iter, ret_samples_ids=None):
     if opts.save_val_results:
         if not os.path.exists(f'results/{iter}'):
             os.mkdir(f'results/{iter}')
-        denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406],
-                                   std=[0.229, 0.224, 0.225])
+        denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054],
+                                   std=[0.2726, 0.2778, 0.2861])
         img_id = 0
 # =============================================================================
     criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
 # =============================================================================
     with torch.no_grad():
         torch.set_grad_enabled(True) 
-        for i, (images, labels) in tqdm(enumerate(loader)):
+        for i, (images, labels, filenames) in tqdm(enumerate(loader)):
             images = images.to(device, dtype=torch.float32)
             
 #            images.requires_grad = True
@@ -345,9 +348,8 @@ def main():
         train_dst, batch_size=opts.batch_size, shuffle=True, num_workers=2,
         drop_last=True)  # drop_last=True to ignore single-image batches.
     val_loader = data.DataLoader(
-        val_dst, batch_size=opts.val_batch_size, shuffle=True, num_workers=2)
-    print("Dataset: %s, Train set: %d, Val set: %d" %
-          (opts.dataset, len(train_dst), len(val_dst)))
+        val_dst, batch_size=opts.val_batch_size, shuffle=False, num_workers=2)
+    print(f"Dataset: {opts.dataset}, Train set: {len(train_dst)}, Val set: {len(val_dst)}")
 
     # Set up model (all models are 'constructed at network.modeling)
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
@@ -398,10 +400,10 @@ def main():
         # https://github.com/VainF/DeepLabV3Plus-Pytorch/issues/8#issuecomment-605601402, @PytaichukBohdan
         checkpoint = torch.load(opts.ckpt, map_location=torch.device('cpu'))
         model.load_state_dict(checkpoint["model_state"])
-        # TODO: change class from 19 to 2
         model.classifier.classifier[-1] = nn.Conv2d(256, 2, 1)
         model = nn.DataParallel(model)
         model.to(device)
+
         if opts.continue_training:
             optimizer.load_state_dict(checkpoint["optimizer_state"])
             scheduler.load_state_dict(checkpoint["scheduler_state"])
@@ -438,7 +440,7 @@ def main():
 #         torch.set_grad_enabled(True) 
 #         #e
 # =============================================================================
-        for (images, labels) in train_loader:
+        for (images, labels, filenames) in train_loader:
             cur_itrs += 1
 
             images = images.to(device, dtype=torch.float32)
@@ -501,13 +503,11 @@ def main():
 
             if (cur_itrs) % 10 == 0:
                 interval_loss = interval_loss / 10
-                print("Epoch %d, Itrs %d/%d, Loss=%f" %
-                      (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
+                print(f"Epoch {cur_epochs}, Itrs {cur_itrs}/{opts.total_itrs}, Loss={interval_loss}")
                 interval_loss = 0.0
 
             if (cur_itrs) % opts.val_interval == 0:
-                save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
-                          (opts.model, opts.dataset, opts.output_stride))
+                save_ckpt(f'checkpoints/latest_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth')
                 print("validation...")
                 model.eval()
                 val_score, ret_samples = validate(
@@ -534,8 +534,190 @@ def main():
             scheduler.step()
 
             if cur_itrs >= opts.total_itrs:
+                save_ckpt(f'checkpoints/last_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth')
                 return
 
 
+def per_image_metric(metric, y_true, y_pred):
+    """
+    calculate some metrics for one image
+    """
+    metric.reset()
+    hist = metric._fast_hist(y_true.flatten(), y_pred.flatten())  # confusion matrix
+    acc = np.diag(hist).sum() / hist.sum()
+    acc_cls = np.diag(hist) / hist.sum(axis=1)
+    acc_cls = np.nanmean(acc_cls)
+    iu = np.diag(hist) / (hist.sum(axis=1) + hist.sum(axis=0) - np.diag(hist))
+    cls_iu = dict(zip(range(metric.n_classes), iu))
+    mean_iu = np.nanmean(iu)
+    return {
+            "Overall Acc": acc,
+            "Mean Acc": acc_cls,
+            "Mean IoU": mean_iu,
+            **cls_iu
+            }
+
+
+def inference(split='val'):
+    """
+    load saved pretrained model
+    infer on train/val sets
+    """
+    opts = get_argparser().parse_args()
+    if opts.dataset.lower() == 'trav':
+        opts.num_classes = 2
+    
+    os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Device: {opts.gpu_id}")
+
+    train_dst, val_dst = get_dataset(opts)
+    if split == 'train':
+        loader = data.DataLoader(
+            train_dst, batch_size=opts.batch_size, shuffle=True, num_workers=2,
+            drop_last=True)  # drop_last=True to ignore single-image batches.
+    else:
+        loader = data.DataLoader(
+            val_dst, batch_size=opts.val_batch_size, shuffle=False, num_workers=2)
+    print(f"Dataset: {opts.dataset}, Train set: {len(train_dst)}, Val set: {len(val_dst)}")
+
+    metrics = StreamSegMetrics(opts.num_classes)
+    perimage_metrics = StreamSegMetrics(opts.num_classes)
+
+    model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
+    utils.set_bn_momentum(model.backbone, momentum=0.01)
+    checkpoint = torch.load(f'checkpoints/last_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth', map_location=torch.device('cpu'))
+    model.load_state_dict(checkpoint["model_state"])
+    # model.classifier.classifier[-1] = nn.Conv2d(256, 2, 1)
+    model = nn.DataParallel(model)
+    model.to(device)
+    model.eval()
+
+    vis_sample_id = np.random.randint(0, len(loader), opts.vis_num_samples,
+                                      np.int32) if opts.enable_vis else None
+    # from validate fn
+    metrics.reset()
+    ret_samples = []
+    if opts.save_val_results:
+        if not os.path.exists(f'results/{opts.dataset}'):
+            os.mkdir(f'results/{opts.dataset}')
+        denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054],
+                                   std=[0.2726, 0.2778, 0.2861])
+        img_id = 0
+
+    criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+    
+    prs = Presentation()
+    prs.slide_width = Inches(16)
+    prs.slide_height = Inches(9)
+    blank_slide_layout = prs.slide_layouts[6]
+    left = top = Inches(0.1)
+    table_top = Inches(6)
+    width = Inches(6.0)
+    height = Inches(1.2)
+
+    for i, (images, labels, filenames) in tqdm(enumerate(loader)):
+        images = images.to(device, dtype=torch.float32)
+        labels = labels.to(device, dtype=torch.long)
+        new_images=Variable(images, requires_grad=True)
+        new_labels=Variable(labels, requires_grad=False)
+
+        outputs = model(new_images)
+        loss = criterion(outputs, new_labels)
+        model.zero_grad()
+        loss.backward()     
+
+        adversarial_x = attacks.segpgd(images,new_images,new_labels,0.005,model)
+        new_output = model(adversarial_x)
+        preds = new_output.detach().max(dim=1)[1].cpu().numpy()
+        targets = labels.detach().cpu().numpy()
+        outputs_numpy = outputs.detach().max(dim=1)[1].cpu().numpy()
+        metrics.update(targets, preds)
+
+        if vis_sample_id is not None and i in vis_sample_id:  # get vis samples
+            ret_samples.append(
+                (images[0].detach().cpu().numpy(), targets[0], preds[0]))
+
+        if opts.save_val_results:
+            for i in range(len(images)):
+                image = images[i].detach().cpu().numpy()
+                target = targets[i]  # y_true
+                pred = preds[i]  # adv y_pred
+                output = outputs_numpy[i]  # clean y_pred
+                adv_iou = per_image_metric(perimage_metrics, target, pred)
+                clean_iou = per_image_metric(perimage_metrics, target, output)
+                adversarial_img = adversarial_x[i].detach().cpu().numpy()
+
+                image = (denorm(image) * 255).transpose(1, 2, 0).astype(np.uint8)
+
+                adversarial_img = (denorm(adversarial_img) * 255).transpose(1, 2, 0).astype(np.uint8)
+
+                # target = loader.dataset.decode_target(target).astype(np.uint8)
+                # pred = loader.dataset.decode_target(pred).astype(np.uint8)
+                slide = prs.slides.add_slide(blank_slide_layout)
+                fig, axs = plt.subplots(2, 3, figsize=(14, 6))
+                axs[0,0].imshow(image)
+                axs[0,0].set_title(f'Clean image')
+                axs[0,0].axis('off')
+
+                axs[0,1].imshow(image)
+                axs[0,1].imshow(target, cmap='viridis', alpha=0.5)
+                axs[0,1].set_title(f'y_true')
+                axs[0,1].axis('off')
+
+                axs[0,2].imshow(image)
+                axs[0,2].imshow(output, cmap='viridis', alpha=0.5)
+                axs[0,2].set_title(f'Clean y_pred')
+                axs[0,2].axis('off')
+
+                axs[1,0].imshow(adversarial_img)
+                axs[1,0].set_title(f'Adv image')
+                axs[1,0].axis('off')
+
+                axs[1,1].imshow(adversarial_img)
+                axs[1,1].imshow(pred, cmap='viridis', alpha=0.5)
+                axs[1,1].set_title(f'Adv y_pred')
+                axs[1,1].axis('off')
+
+                img_filename = f'results/{opts.dataset}/{img_id}_overlay.png'
+                fig.savefig(img_filename, bbox_inches='tight', pad_inches=0)
+                plt.close()
+                file_parts = filenames[i].split(os.sep)
+                split_index = file_parts.index('segmentation_indoor_images')
+                right_filename = os.sep.join(file_parts[split_index+1:])
+                pic = slide.shapes.add_picture(img_filename, left, top)
+                shapes = slide.shapes
+                table = shapes.add_table(3, 6, left, table_top, width, height).table
+                table.cell(0, 0).text = right_filename
+                table.cell(1, 0).text = 'Clean'
+                table.cell(2, 0).text = 'Adv'
+                keys = list(clean_iou.keys())
+                for idx, k in enumerate(keys):
+                    table.cell(0, idx+1).text = str(k)  # [Overall acc, ...]
+                    table.cell(1, idx+1).text = str(clean_iou[k])
+                    table.cell(2, idx+1).text = str(adv_iou[k])
+
+                # Image.fromarray(image).save(f'results/{opts.dataset}/{iter}/{img_id}_image.png')
+                # Image.fromarray(adversarial_img).save(f'results/{opts.dataset}/{iter}/{img_id}_atimage.png')
+                # Image.fromarray(target).save(f'results/{opts.dataset}/{iter}/{img_id}_target.png')
+                # Image.fromarray(pred).save(f'results/{opts.dataset}/{iter}/{img_id}_pred.png')
+
+                # fig = plt.figure()
+                # plt.imshow(image)
+                # plt.axis('off')
+                # plt.imshow(pred, alpha=0.7)
+                # ax = plt.gca()
+                # ax.xaxis.set_major_locator(matplotlib.ticker.NullLocator())
+                # ax.yaxis.set_major_locator(matplotlib.ticker.NullLocator())
+                # plt.savefig(f'results/{opts.dataset}/{iter}/{img_id}_overlay.png', bbox_inches='tight', pad_inches=0)
+                # plt.close()
+                img_id += 1
+
+    score = metrics.get_results()
+    prs.save(f'results/{opts.dataset}_{split}.pptx')
+    return score, ret_samples
+
+
 if __name__ == '__main__':
-    main()
+    # main()
+    inference()
