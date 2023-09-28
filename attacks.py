@@ -1,7 +1,7 @@
 """Generates adversarial example for Caffe networks."""
 
-import numpy as np
-
+# import numpy as np
+from copy import deepcopy
 import torch
 import torch.nn as nn
 
@@ -38,22 +38,38 @@ def fgsm(images,new_images,eps):
     return adversarial_x
 
 
-def pgd(image, new_images, new_labels, eps, model):
+# def pgd(image, new_images, new_labels, eps, model):
     
-    criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
-    Total_iterations = 10
-    eps = eps / Total_iterations
-    for i in range(Total_iterations):
-            new_images_d = new_images.detach()
-            new_images_d.requires_grad_()
-            with torch.enable_grad():
-                logits = model(new_images_d)
-                loss = criterion(logits, new_labels)
-            grad = torch.autograd.grad(loss, [new_images_d])[0]
-            image = image.detach() + eps * torch.sign(grad.detach())
-            adversarial_x = torch.min(torch.max(image, new_images - eps*1), new_images + eps*1)
+#     criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+#     Total_iterations = 10
+#     eps = eps / Total_iterations
+#     for i in range(Total_iterations):
+#         new_images_d = new_images.detach()
+#         new_images_d.requires_grad_()
+#         with torch.enable_grad():
+#             logits = model(new_images_d)
+#             loss = criterion(logits, new_labels)
+#         grad = torch.autograd.grad(loss, [new_images_d])[0]
+#         image = image.detach() + eps * torch.sign(grad.detach())
+#         adversarial_x = torch.min(torch.max(image, new_images - eps*1), new_images + eps*1)
     
-    return adversarial_x
+#     return adversarial_x
+
+
+def pgd(model, x, y, device, epsilon, alpha, num_iter): # Untargetted Attack 1
+    delta = torch.zeros_like(x, requires_grad=True).to(device)
+    trg = deepcopy(y)  # .squeeze(1)
+    loss_fn = nn.CrossEntropyLoss(ignore_index=255)
+    
+    for t in range(num_iter):
+        loss = loss_fn(model(x + delta), trg.long())
+        loss.backward()
+        # print('Loss after iteration {}: {:.3f}'.format(t+1, loss.item()))
+        delta.data = (delta + x.shape[0]*alpha*delta.grad.data).clamp(-epsilon,epsilon)
+        delta.grad.zero_()
+        
+    return delta.detach()
+
 
 def segpgd(image, new_images, new_labels, eps, model):
    
@@ -61,38 +77,38 @@ def segpgd(image, new_images, new_labels, eps, model):
    Total_iterations = 10
    eps = eps / Total_iterations
    for i in range(Total_iterations):
-           new_images_d = new_images.detach()
-           new_images_d.requires_grad_()
-           with torch.enable_grad():
-               logits = model(new_images_d)
+        new_images_d = new_images.detach()
+        new_images_d.requires_grad_()
+        with torch.enable_grad():
+            logits = model(new_images_d)
 
-               #logits vs new labels
-               lamb = (i-1)/(Total_iterations*2)
+            #logits vs new labels
+            lamb = (i-1)/(Total_iterations*2)
 
-               pred = torch.max(logits,1).values
-               pred = torch.unsqueeze(pred,1)
-               
-            #    print(pred.shape)
-            #    print(torch.unsqueeze(new_labels,1).shape)
+            pred = torch.max(logits,1).values
+            pred = torch.unsqueeze(pred,1)
+            
+        #    print(pred.shape)
+        #    print(torch.unsqueeze(new_labels,1).shape)
 
-               mask_t = pred == torch.unsqueeze(new_labels,1)
-               mask_t = torch.squeeze(mask_t,1).int()
-               np_mask_t = torch.unsqueeze(mask_t,1)
+            mask_t = pred == torch.unsqueeze(new_labels,1)
+            mask_t = torch.squeeze(mask_t,1).int()
+            np_mask_t = torch.unsqueeze(mask_t,1)
 
-               mask_f = pred != torch.unsqueeze(new_labels,1)
-               mask_f = torch.squeeze(mask_f,1).int()
-               np_mask_f = torch.unsqueeze(mask_f,1)
+            mask_f = pred != torch.unsqueeze(new_labels,1)
+            mask_f = torch.squeeze(mask_f,1).int()
+            np_mask_f = torch.unsqueeze(mask_f,1)
 
-               # need to be check the loss
-            #    print((np_mask_t*logits).shape)
-            #    print((new_labels).shape)
-               loss_t = lamb* criterion(np_mask_t*logits, new_labels)
-               loss_f = (1-lamb) * criterion(np_mask_f*logits, new_labels)
-               loss = loss_t + loss_f
-           
-           grad = torch.autograd.grad(loss, [new_images_d])[0]
-           image = image.detach() + eps * torch.sign(grad.detach())
-           adversarial_x = torch.min(torch.max(new_images_d, new_images - eps*1), new_images + eps*1)
+            # need to be check the loss
+        #    print((np_mask_t*logits).shape)
+        #    print((new_labels).shape)
+            loss_t = lamb* criterion(np_mask_t*logits, new_labels)
+            loss_f = (1-lamb) * criterion(np_mask_f*logits, new_labels)
+            loss = loss_t + loss_f
+        
+        grad = torch.autograd.grad(loss, [new_images_d])[0]
+        image = image.detach() + eps * torch.sign(grad.detach())
+        adversarial_x = torch.min(torch.max(new_images_d, new_images - eps*1), new_images + eps*1)
    
    return adversarial_x
 

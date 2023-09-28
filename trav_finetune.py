@@ -13,6 +13,7 @@ import numpy as np
 import attacks
 from pptx import Presentation
 from pptx.util import Inches
+import pandas as pd
 
 from torch.utils import data
 from datasets import IndoorTrav
@@ -69,14 +70,17 @@ def get_argparser():
                         help='crop validation (default: False)')
     parser.add_argument("--batch_size", type=int, default=16,
                         help='batch size (default: 16)')
-    parser.add_argument("--val_batch_size", type=int, default=2,
+    parser.add_argument("--val_batch_size", type=int, default=4,
                         help='batch size for validation (default: 4)')
     parser.add_argument("--crop_size", type=int, default=480)
 
     parser.add_argument("--ckpt", default='checkpoints/best_deeplabv3plus_resnet101_cityscapes_os16.pth.tar',
                         type=str, help="restore from checkpoint")
     parser.add_argument("--continue_training", action='store_true', default=False)
-
+    parser.add_argument("--eps", type=float, default=0.005,
+                        help="PGD attack epsilon")
+    parser.add_argument("--alpha", type=float, default=100.0,
+                        help="PGD attack alpha")
     parser.add_argument("--loss_type", type=str, default='cross_entropy',
                         choices=['cross_entropy', 'focal_loss'], help="loss type (default: False)")
     parser.add_argument("--gpu_id", type=str, default='0,1',
@@ -605,7 +609,7 @@ def inference(split='val'):
                                    std=[0.2726, 0.2778, 0.2861])
         img_id = 0
 
-    criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+    # criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
     
     prs = Presentation()
     prs.slide_width = Inches(16)
@@ -613,40 +617,41 @@ def inference(split='val'):
     blank_slide_layout = prs.slide_layouts[6]
     left = top = Inches(0.1)
     table_top = Inches(6)
-    width = Inches(6.0)
+    width = Inches(14.0)
     height = Inches(1.2)
+    # df = pd.DataFrame(columns=['image_id', 'eps', 'alpha', 'effect'])
 
-    for i, (images, labels, filenames) in tqdm(enumerate(loader)):
-        images = images.to(device, dtype=torch.float32)
-        labels = labels.to(device, dtype=torch.long)
-        new_images=Variable(images, requires_grad=True)
-        new_labels=Variable(labels, requires_grad=False)
+    torch.set_grad_enabled(True) 
+    for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader)):
+        x_clean = x_clean.to(device, dtype=torch.float32)
+        y_true = y_true.to(device, dtype=torch.uint8)
+        
+        y_pred_clean = model(x_clean)
 
-        outputs = model(new_images)
-        loss = criterion(outputs, new_labels)
-        model.zero_grad()
-        loss.backward()     
-
-        adversarial_x = attacks.segpgd(images,new_images,new_labels,0.005,model)
-        new_output = model(adversarial_x)
-        preds = new_output.detach().max(dim=1)[1].cpu().numpy()
-        targets = labels.detach().cpu().numpy()
-        outputs_numpy = outputs.detach().max(dim=1)[1].cpu().numpy()
-        metrics.update(targets, preds)
+        delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
+        x_adv = x_clean.float() + delta1.float()
+        y_pred_adv = model(x_adv)
+        y_pred_adv_np = y_pred_adv.detach().max(dim=1)[1].cpu().numpy()
+        y_true_np = y_true.detach().cpu().numpy()
+        y_pred_clean_np = y_pred_clean.detach().max(dim=1)[1].cpu().numpy()
+        metrics.update(y_true_np, y_pred_adv_np)
 
         if vis_sample_id is not None and i in vis_sample_id:  # get vis samples
             ret_samples.append(
-                (images[0].detach().cpu().numpy(), targets[0], preds[0]))
+                (x_clean[0].detach().cpu().numpy(), y_true_np[0], y_pred_adv_np[0]))
 
         if opts.save_val_results:
-            for i in range(len(images)):
-                image = images[i].detach().cpu().numpy()
-                target = targets[i]  # y_true
-                pred = preds[i]  # adv y_pred
-                output = outputs_numpy[i]  # clean y_pred
+            for j in range(len(x_clean)):
+                image = x_clean[j].detach().cpu().numpy()
+                delta_np = np.sum(delta1[j].detach().cpu().numpy(), axis=0)
+                total_pertub = np.sum(np.abs(delta_np))
+                target = y_true_np[j]  # y_true
+                pred = y_pred_adv_np[j]  # adv y_pred
+                output = y_pred_clean_np[j]  # clean y_pred
                 adv_iou = per_image_metric(perimage_metrics, target, pred)
                 clean_iou = per_image_metric(perimage_metrics, target, output)
-                adversarial_img = adversarial_x[i].detach().cpu().numpy()
+                adversarial_img = x_adv[j].detach().cpu().numpy()
+                effect = (clean_iou['Mean IoU'] - adv_iou['Mean IoU'])/total_pertub
 
                 image = (denorm(image) * 255).transpose(1, 2, 0).astype(np.uint8)
 
@@ -661,12 +666,12 @@ def inference(split='val'):
                 axs[0,0].axis('off')
 
                 axs[0,1].imshow(image)
-                axs[0,1].imshow(target, cmap='viridis', alpha=0.5)
+                axs[0,1].imshow(target, cmap='viridis', alpha=0.4)
                 axs[0,1].set_title(f'y_true')
                 axs[0,1].axis('off')
 
                 axs[0,2].imshow(image)
-                axs[0,2].imshow(output, cmap='viridis', alpha=0.5)
+                axs[0,2].imshow(output, cmap='viridis', alpha=0.4)
                 axs[0,2].set_title(f'Clean y_pred')
                 axs[0,2].axis('off')
 
@@ -675,46 +680,46 @@ def inference(split='val'):
                 axs[1,0].axis('off')
 
                 axs[1,1].imshow(adversarial_img)
-                axs[1,1].imshow(pred, cmap='viridis', alpha=0.5)
+                axs[1,1].imshow(pred, cmap='viridis', alpha=0.4)
                 axs[1,1].set_title(f'Adv y_pred')
                 axs[1,1].axis('off')
+
+                axs[1,2].set_title(f'delta, eps={opts.eps}, alpha={opts.alpha}, total_pertub: {total_pertub}')
+                axs[1,2].imshow(delta_np, cmap='viridis')
+                axs[1,2].axis('off')
 
                 img_filename = f'results/{opts.dataset}/{img_id}_overlay.png'
                 fig.savefig(img_filename, bbox_inches='tight', pad_inches=0)
                 plt.close()
-                file_parts = filenames[i].split(os.sep)
+                file_parts = filenames[j].split(os.sep)
                 split_index = file_parts.index('segmentation_indoor_images')
                 right_filename = os.sep.join(file_parts[split_index+1:])
                 pic = slide.shapes.add_picture(img_filename, left, top)
                 shapes = slide.shapes
-                table = shapes.add_table(3, 6, left, table_top, width, height).table
+                table = shapes.add_table(4, 6, left, table_top, width, height).table
                 table.cell(0, 0).text = right_filename
                 table.cell(1, 0).text = 'Clean'
                 table.cell(2, 0).text = 'Adv'
+                table.cell(3, 0).text = 'total delta mean IoU/pertub'
+                table.cell(3, 1).text = f"{effect}"
                 keys = list(clean_iou.keys())
                 for idx, k in enumerate(keys):
                     table.cell(0, idx+1).text = str(k)  # [Overall acc, ...]
-                    table.cell(1, idx+1).text = str(clean_iou[k])
-                    table.cell(2, idx+1).text = str(adv_iou[k])
+                    table.cell(1, idx+1).text = f'{clean_iou[k]:.4f}'
+                    table.cell(2, idx+1).text = f'{adv_iou[k]:.4f}'
 
-                # Image.fromarray(image).save(f'results/{opts.dataset}/{iter}/{img_id}_image.png')
-                # Image.fromarray(adversarial_img).save(f'results/{opts.dataset}/{iter}/{img_id}_atimage.png')
-                # Image.fromarray(target).save(f'results/{opts.dataset}/{iter}/{img_id}_target.png')
-                # Image.fromarray(pred).save(f'results/{opts.dataset}/{iter}/{img_id}_pred.png')
-
-                # fig = plt.figure()
-                # plt.imshow(image)
-                # plt.axis('off')
-                # plt.imshow(pred, alpha=0.7)
-                # ax = plt.gca()
-                # ax.xaxis.set_major_locator(matplotlib.ticker.NullLocator())
-                # ax.yaxis.set_major_locator(matplotlib.ticker.NullLocator())
-                # plt.savefig(f'results/{opts.dataset}/{iter}/{img_id}_overlay.png', bbox_inches='tight', pad_inches=0)
-                # plt.close()
+                # append to df
+                # new_df = pd.DataFrame({'image_id': right_filename, 'eps': eps, 'alpha': alfa, 'effect': effect}, index=[1])
+                # df = pd.concat([df, new_df], ignore_index=True)
                 img_id += 1
 
+        # if i > 10:
+        #     break
+
     score = metrics.get_results()
-    prs.save(f'results/{opts.dataset}_{split}.pptx')
+    print(score)
+    # df.to_csv(f'results/effects.csv')
+    prs.save(f'results/{opts.dataset}_{split}6.pptx')    
     return score, ret_samples
 
 
