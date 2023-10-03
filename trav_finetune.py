@@ -621,7 +621,6 @@ def inference(split='val'):
     height = Inches(1.2)
     # df = pd.DataFrame(columns=['image_id', 'eps', 'alpha', 'effect'])
 
-    torch.set_grad_enabled(True) 
     for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader)):
         x_clean = x_clean.to(device, dtype=torch.float32)
         y_true = y_true.to(device, dtype=torch.uint8)
