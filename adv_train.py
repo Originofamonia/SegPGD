@@ -60,7 +60,7 @@ def get_argparser():
                         help="save segmentation results to \"./results\"")
     parser.add_argument("--total_itrs", type=int, default=3e4,
                         help="total iter number (default: 3e4)")
-    parser.add_argument("--epochs", type=int, default=100,
+    parser.add_argument("--epochs", type=int, default=5,
                         help="total number of epochs (default: 1e2)")
     parser.add_argument("--lr", type=float, default=0.01,
                         help="learning rate (default: 0.01)")
@@ -92,7 +92,7 @@ def get_argparser():
                         help="random seed (default: 1)")
     parser.add_argument("--print_interval", type=int, default=10,
                         help="print interval of loss (default: 10)")
-    parser.add_argument("--val_interval", type=int, default=33,
+    parser.add_argument("--val_interval", type=int, default=2,
                         help="epoch interval for eval (default: 100)")
     parser.add_argument("--download", action='store_true', default=False,
                         help="download datasets")
@@ -142,7 +142,7 @@ def get_dataset(opts):
     return train_dst, val_dst
 
 
-def validate(opts, model, loader, device, metrics, cur_itrs, clean=False):
+def validate(opts, model, loader, device, metrics, epoch, clean=False):
     """
     clean: bool, evaluate on clean or adv examples
     """
@@ -249,9 +249,9 @@ def validate(opts, model, loader, device, metrics, cur_itrs, clean=False):
                 img_id += 1
 
     score = metrics.get_results()
-    print(f'iter: {cur_itrs}; {score}')
+    print(f'iter: {epoch}; {score}')
     # df.to_csv(f'results/effects.csv')
-    prs.save(f'results/{opts.dataset}_val_{date.today()}.pptx')    
+    prs.save(f'results/{opts.dataset}_val_{epoch}_{date.today()}.pptx')    
     return score
 
 
@@ -381,7 +381,7 @@ def main():
             optimizer.step()
             # train_loss += loss.item()
 
-            if (e) % opts.val_interval == 0:
+            if e % opts.val_interval == 0:
                 # save_ckpt(f'checkpoints/latest_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth')
                 print("validation...")
                 model.eval()

@@ -656,8 +656,6 @@ def inference(split='val'):
 
                 adversarial_img = (denorm(adversarial_img) * 255).transpose(1, 2, 0).astype(np.uint8)
 
-                # target = loader.dataset.decode_target(target).astype(np.uint8)
-                # pred = loader.dataset.decode_target(pred).astype(np.uint8)
                 slide = prs.slides.add_slide(blank_slide_layout)
                 fig, axs = plt.subplots(2, 3, figsize=(14, 6))
                 axs[0,0].imshow(image)
@@ -722,6 +720,100 @@ def inference(split='val'):
     return score, ret_samples
 
 
+def save_separate_images(split='val'):
+    """
+    similar to the above fn, but save separate images instead of together.
+    """
+    opts = get_argparser().parse_args()
+    if opts.dataset.lower() == 'trav':
+        opts.num_classes = 2
+    
+    os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Device: {opts.gpu_id}")
+
+    train_dst, val_dst = get_dataset(opts)
+    if split == 'train':
+        loader = data.DataLoader(
+            train_dst, batch_size=opts.batch_size, shuffle=True, num_workers=2,
+            drop_last=True)  # drop_last=True to ignore single-image batches.
+    else:
+        loader = data.DataLoader(
+            val_dst, batch_size=opts.val_batch_size, shuffle=False, num_workers=2)
+    print(f"Dataset: {opts.dataset}, Train set: {len(train_dst)}, Val set: {len(val_dst)}")
+
+    model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
+    utils.set_bn_momentum(model.backbone, momentum=0.01)
+    checkpoint = torch.load(f'checkpoints/clean_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth', map_location=torch.device('cpu'))
+    model.load_state_dict(checkpoint["model_state"])
+    model = nn.DataParallel(model)
+    model.to(device)
+    model.eval()
+
+    # from validate fn
+    if opts.save_val_results:
+        if not os.path.exists(f'results/{opts.dataset}'):
+            os.mkdir(f'results/{opts.dataset}')
+        denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054],
+                                   std=[0.2726, 0.2778, 0.2861])
+        img_id = 0
+
+    for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader)):
+        x_clean = x_clean.to(device, dtype=torch.float32)
+        y_true = y_true.to(device, dtype=torch.uint8)
+        
+        y_pred_clean = model(x_clean)
+
+        delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
+        x_adv = x_clean.float() + delta1.float()
+        y_pred_adv = model(x_adv)
+        y_pred_adv_np = y_pred_adv.detach().max(dim=1)[1].cpu().numpy()
+        y_true_np = y_true.detach().cpu().numpy()
+        y_pred_clean_np = y_pred_clean.detach().max(dim=1)[1].cpu().numpy()
+
+        if opts.save_val_results:
+            for j in range(len(x_clean)):
+                image = x_clean[j].detach().cpu().numpy()
+                # delta_np = np.sum(delta1[j].detach().cpu().numpy(), axis=0)
+                # total_pertub = np.sum(np.abs(delta_np))
+                target = y_true_np[j]  # y_true
+                pred = y_pred_adv_np[j]  # adv y_pred
+                output = y_pred_clean_np[j]  # clean y_pred
+
+                adversarial_img = x_adv[j].detach().cpu().numpy()
+                image = (denorm(image) * 255).transpose(1, 2, 0).astype(np.uint8)
+                adversarial_img = (denorm(adversarial_img) * 255).transpose(1, 2, 0).astype(np.uint8)
+
+                plt.imsave(f'results/trav/{i}_{j}_x_clean.png', image)
+
+                fig, ax = plt.subplots()
+                ax.imshow(image)
+                ax.imshow(target, cmap='viridis', alpha=0.4)
+                ax.axis('off')
+                fig.savefig(f'results/trav/{i}_{j}_y_true.png',bbox_inches='tight', pad_inches=0)
+                plt.close(fig)
+
+                fig, ax = plt.subplots()
+                ax.imshow(image)
+                ax.imshow(output, cmap='viridis', alpha=0.4)
+                ax.axis('off')
+                fig.savefig(f'results/trav/{i}_{j}_clean_y_true.png',bbox_inches='tight', pad_inches=0)
+                plt.close(fig)
+
+                plt.imsave(f'results/trav/{i}_{j}_x_adv.png', adversarial_img)
+
+                fig, ax = plt.subplots()
+                ax.imshow(adversarial_img)
+                ax.imshow(pred, cmap='viridis', alpha=0.4)
+                ax.axis('off')
+                fig.savefig(f'results/trav/{i}_{j}_adv_y_pred.png',bbox_inches='tight', pad_inches=0)
+                plt.close(fig)
+
+                img_id += 1
+
+    return  # ret_samples
+
 if __name__ == '__main__':
     # main()
-    inference()
+    # inference()
+    save_separate_images()
