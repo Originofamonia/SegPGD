@@ -45,10 +45,10 @@ def _segm_resnet(name, backbone_name, num_classes, output_stride, pretrained_bac
     inplanes = 2048
     low_level_planes = 256
 
-    if name=='deeplabv3plus':
-        return_layers = {'layer4': 'out', 'layer1': 'low_level'}
+    if name == 'deeplabv3plus':
+        return_layers = {'layer4': 'out', 'layer1': 'low_level', 'layer2': 'layer2', 'layer3': 'layer3'}
         classifier = DeepLabHeadV3Plus(inplanes, low_level_planes, num_classes, aspp_dilate)
-    elif name=='deeplabv3':
+    elif name == 'deeplabv3':
         return_layers = {'layer4': 'out'}
         classifier = DeepLabHead(inplanes , num_classes, aspp_dilate)
     backbone = IntermediateLayerGetter(backbone, return_layers=return_layers)

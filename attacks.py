@@ -56,13 +56,13 @@ def fgsm(images,new_images,eps):
 #     return adversarial_x
 
 
-def pgd(model, x, y, device, epsilon, alpha, num_iter): # Untargetted Attack 1
+def pgd(model, x, y, device, epsilon, alpha, num_iter): # Untargetted Attack
     delta = torch.zeros_like(x, requires_grad=True).to(device)
     trg = deepcopy(y)  # .squeeze(1)
     loss_fn = nn.CrossEntropyLoss(ignore_index=255)
     
     for t in range(num_iter):
-        loss = loss_fn(model(x + delta), trg.long())
+        loss = loss_fn(model(x + delta)[0], trg.long())
         loss.backward()
         # print('Loss after iteration {}: {:.3f}'.format(t+1, loss.item()))
         delta.data = (delta + x.shape[0]*alpha*delta.grad.data).clamp(-epsilon,epsilon)
@@ -72,7 +72,6 @@ def pgd(model, x, y, device, epsilon, alpha, num_iter): # Untargetted Attack 1
 
 
 def segpgd(image, new_images, new_labels, eps, model):
-   
    criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
    Total_iterations = 10
    eps = eps / Total_iterations

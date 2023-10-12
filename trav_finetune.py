@@ -590,7 +590,7 @@ def inference(split='val'):
 
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
-    checkpoint = torch.load(f'checkpoints/last_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth', map_location=torch.device('cpu'))
+    checkpoint = torch.load(f'checkpoints/robust_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth', map_location=torch.device('cpu'))
     model.load_state_dict(checkpoint["model_state"])
     # model.classifier.classifier[-1] = nn.Conv2d(256, 2, 1)
     model = nn.DataParallel(model)
@@ -724,6 +724,7 @@ def save_separate_images(split='val'):
     """
     similar to the above fn, but save separate images instead of together.
     """
+    model_type = f'robust'
     opts = get_argparser().parse_args()
     if opts.dataset.lower() == 'trav':
         opts.num_classes = 2
@@ -744,7 +745,7 @@ def save_separate_images(split='val'):
 
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
-    checkpoint = torch.load(f'checkpoints/clean_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth', map_location=torch.device('cpu'))
+    checkpoint = torch.load(f'checkpoints/{model_type}_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth', map_location=torch.device('cpu'))
     model.load_state_dict(checkpoint["model_state"])
     model = nn.DataParallel(model)
     model.to(device)
@@ -762,11 +763,22 @@ def save_separate_images(split='val'):
         x_clean = x_clean.to(device, dtype=torch.float32)
         y_true = y_true.to(device, dtype=torch.uint8)
         
-        y_pred_clean = model(x_clean)
+        y_pred_clean, clean_features = model(x_clean)
 
         delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
         x_adv = x_clean.float() + delta1.float()
-        y_pred_adv = model(x_adv)
+        y_pred_adv, adv_features = model(x_adv)
+        # for k, v in clean_features.items():
+        #     clean_features[k] = v.detach().cpu().numpy()
+
+        # for k, v in adv_features.items():
+        #     adv_features[k] = v.detach().cpu().numpy()
+
+        # np.savez(f'results/hidden_layers/{i}_clean.npz', **clean_features)  # no, didn't save space
+        # np.savez(f'results/hidden_layers/{i}_adv.npz', **adv_features)
+        # torch.save(clean_features, f'results/hidden_layers/{i}_clean.pth')
+        # torch.save(adv_features, f'results/hidden_layers/{i}_adv.pth')
+        # continue
         y_pred_adv_np = y_pred_adv.detach().max(dim=1)[1].cpu().numpy()
         y_true_np = y_true.detach().cpu().numpy()
         y_pred_clean_np = y_pred_clean.detach().max(dim=1)[1].cpu().numpy()
@@ -784,29 +796,29 @@ def save_separate_images(split='val'):
                 image = (denorm(image) * 255).transpose(1, 2, 0).astype(np.uint8)
                 adversarial_img = (denorm(adversarial_img) * 255).transpose(1, 2, 0).astype(np.uint8)
 
-                plt.imsave(f'results/trav/{i}_{j}_x_clean.png', image)
+                # plt.imsave(f'results/trav/{model_type}_{i}_{j}_x_clean.png', image)
 
-                fig, ax = plt.subplots()
-                ax.imshow(image)
-                ax.imshow(target, cmap='viridis', alpha=0.4)
-                ax.axis('off')
-                fig.savefig(f'results/trav/{i}_{j}_y_true.png',bbox_inches='tight', pad_inches=0)
-                plt.close(fig)
+                # fig, ax = plt.subplots()
+                # ax.imshow(image)
+                # ax.imshow(target, cmap='viridis', alpha=0.4)
+                # ax.axis('off')
+                # fig.savefig(f'results/trav/{i}_{j}_y_true.png',bbox_inches='tight', pad_inches=0)
+                # plt.close(fig)
 
                 fig, ax = plt.subplots()
                 ax.imshow(image)
                 ax.imshow(output, cmap='viridis', alpha=0.4)
                 ax.axis('off')
-                fig.savefig(f'results/trav/{i}_{j}_clean_y_true.png',bbox_inches='tight', pad_inches=0)
+                fig.savefig(f'results/after/{model_type}_{i}_{j}_clean_y_true.png',bbox_inches='tight', pad_inches=0)
                 plt.close(fig)
 
-                plt.imsave(f'results/trav/{i}_{j}_x_adv.png', adversarial_img)
+                # plt.imsave(f'results/trav/{i}_{j}_x_adv.png', adversarial_img)
 
                 fig, ax = plt.subplots()
                 ax.imshow(adversarial_img)
                 ax.imshow(pred, cmap='viridis', alpha=0.4)
                 ax.axis('off')
-                fig.savefig(f'results/trav/{i}_{j}_adv_y_pred.png',bbox_inches='tight', pad_inches=0)
+                fig.savefig(f'results/after/{model_type}_{i}_{j}_adv_y_pred.png',bbox_inches='tight', pad_inches=0)
                 plt.close(fig)
 
                 img_id += 1
