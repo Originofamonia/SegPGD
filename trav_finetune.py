@@ -759,7 +759,7 @@ def save_separate_images(split='val'):
                                    std=[0.2726, 0.2778, 0.2861])
         img_id = 0
 
-    for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader)):
+    for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader), desc=f'batches'):
         x_clean = x_clean.to(device, dtype=torch.float32)
         y_true = y_true.to(device, dtype=torch.uint8)
         
