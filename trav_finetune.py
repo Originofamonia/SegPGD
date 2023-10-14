@@ -590,7 +590,7 @@ def inference(split='val'):
 
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
-    checkpoint = torch.load(f'checkpoints/robust_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth', map_location=torch.device('cpu'))
+    checkpoint = torch.load(f'checkpoints/hloss_{opts.model}_{opts.dataset}_os{opts.output_stride}.pt', map_location=torch.device('cpu'))
     model.load_state_dict(checkpoint["model_state"])
     # model.classifier.classifier[-1] = nn.Conv2d(256, 2, 1)
     model = nn.DataParallel(model)
@@ -716,7 +716,7 @@ def inference(split='val'):
     score = metrics.get_results()
     print(score)
     # df.to_csv(f'results/effects.csv')
-    prs.save(f'results/{opts.dataset}_{split}6.pptx')    
+    prs.save(f'results/{opts.dataset}_{split}6.pptx')
     return score, ret_samples
 
 
@@ -724,7 +724,7 @@ def save_separate_images(split='val'):
     """
     similar to the above fn, but save separate images instead of together.
     """
-    model_type = f'robust'
+    model_type = f'hloss'  # or clean
     opts = get_argparser().parse_args()
     if opts.dataset.lower() == 'trav':
         opts.num_classes = 2
@@ -745,7 +745,7 @@ def save_separate_images(split='val'):
 
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
-    checkpoint = torch.load(f'checkpoints/{model_type}_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth', map_location=torch.device('cpu'))
+    checkpoint = torch.load(f'checkpoints/{model_type}_{opts.model}_{opts.dataset}_os{opts.output_stride}.pt', map_location=torch.device('cpu'))
     model.load_state_dict(checkpoint["model_state"])
     model = nn.DataParallel(model)
     model.to(device)
@@ -753,8 +753,8 @@ def save_separate_images(split='val'):
 
     # from validate fn
     if opts.save_val_results:
-        if not os.path.exists(f'results/{opts.dataset}'):
-            os.mkdir(f'results/{opts.dataset}')
+        if not os.path.exists(f'results/{model_type}'):
+            os.mkdir(f'results/{model_type}')
         denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054],
                                    std=[0.2726, 0.2778, 0.2861])
         img_id = 0
@@ -762,12 +762,12 @@ def save_separate_images(split='val'):
     for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader), desc=f'batches'):
         x_clean = x_clean.to(device, dtype=torch.float32)
         y_true = y_true.to(device, dtype=torch.uint8)
-        
-        y_pred_clean, clean_features = model(x_clean)
+
+        y_pred_clean, _ = model(x_clean)
 
         delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
         x_adv = x_clean.float() + delta1.float()
-        y_pred_adv, adv_features = model(x_adv)
+        y_pred_adv, _ = model(x_adv)
         # for k, v in clean_features.items():
         #     clean_features[k] = v.detach().cpu().numpy()
 
@@ -809,7 +809,7 @@ def save_separate_images(split='val'):
                 ax.imshow(image)
                 ax.imshow(output, cmap='viridis', alpha=0.4)
                 ax.axis('off')
-                fig.savefig(f'results/after/{model_type}_{i}_{j}_clean_y_true.png',bbox_inches='tight', pad_inches=0)
+                fig.savefig(f'results/{model_type}/{model_type}_{i}_{j}_clean_y_pred.png',bbox_inches='tight', pad_inches=0)
                 plt.close(fig)
 
                 # plt.imsave(f'results/trav/{i}_{j}_x_adv.png', adversarial_img)
@@ -818,7 +818,7 @@ def save_separate_images(split='val'):
                 ax.imshow(adversarial_img)
                 ax.imshow(pred, cmap='viridis', alpha=0.4)
                 ax.axis('off')
-                fig.savefig(f'results/after/{model_type}_{i}_{j}_adv_y_pred.png',bbox_inches='tight', pad_inches=0)
+                fig.savefig(f'results/{model_type}/{model_type}_{i}_{j}_adv_y_pred.png',bbox_inches='tight', pad_inches=0)
                 plt.close(fig)
 
                 img_id += 1

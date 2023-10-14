@@ -23,8 +23,9 @@ from metrics import StreamSegMetrics
 import torch
 import torch.nn as nn
 from utils.visualizer import Visualizer
+import torch.nn.functional as F
 
-from PIL import Image
+import wandb
 import matplotlib.pyplot as plt
 
 from trav_finetune import per_image_metric
@@ -58,9 +59,9 @@ def get_argparser():
     parser.add_argument("--test_only", action='store_true', default=False)
     parser.add_argument("--save_val_results", action='store_true', default=True,
                         help="save segmentation results to \"./results\"")
-    parser.add_argument("--total_itrs", type=int, default=3e4,
-                        help="total iter number (default: 3e4)")
-    parser.add_argument("--epochs", type=int, default=5,
+    # parser.add_argument("--total_itrs", type=int, default=3e4,
+    #                     help="total iter number (default: 3e4)")
+    parser.add_argument("--epochs", type=int, default=50,
                         help="total number of epochs (default: 1e2)")
     parser.add_argument("--lr", type=float, default=0.01,
                         help="learning rate (default: 0.01)")
@@ -92,7 +93,7 @@ def get_argparser():
                         help="random seed (default: 1)")
     parser.add_argument("--print_interval", type=int, default=10,
                         help="print interval of loss (default: 10)")
-    parser.add_argument("--val_interval", type=int, default=2,
+    parser.add_argument("--val_interval", type=int, default=10,
                         help="epoch interval for eval (default: 100)")
     parser.add_argument("--download", action='store_true', default=False,
                         help="download datasets")
@@ -146,6 +147,7 @@ def validate(opts, model, loader, device, metrics, epoch, clean=False):
     """
     clean: bool, evaluate on clean or adv examples
     """
+    metrics.reset()
     perimage_metrics = StreamSegMetrics(opts.num_classes)
     denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054],
                                std=[0.2726, 0.2778, 0.2861])
@@ -164,14 +166,14 @@ def validate(opts, model, loader, device, metrics, epoch, clean=False):
         x_clean = x_clean.to(device, dtype=torch.float32)
         y_true = y_true.to(device, dtype=torch.uint8)
         
-        y_pred_clean = model(x_clean)
+        y_pred_clean, _ = model(x_clean)
         if clean:
             delta1 = torch.zeros_like(x_clean)
         else:
             delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
 
         x_adv = x_clean.float() + delta1.float()
-        y_pred_adv = model(x_adv)
+        y_pred_adv, _ = model(x_adv)
         y_pred_adv_np = y_pred_adv.detach().max(dim=1)[1].cpu().numpy()
         y_true_np = y_true.detach().cpu().numpy()
         y_pred_clean_np = y_pred_clean.detach().max(dim=1)[1].cpu().numpy()
@@ -255,6 +257,19 @@ def validate(opts, model, loader, device, metrics, epoch, clean=False):
     return score
 
 
+def kl_div_loss(logits_q, logits_p, T):
+    assert logits_p.size() == logits_q.size()
+    logits_q = logits_q.view(logits_q.size()[0], -1)
+    logits_p = logits_p.view(logits_p.size()[0], -1)
+    b, c = logits_p.size()
+    p = nn.Softmax(dim=1)(logits_p / T)
+    q = nn.Softmax(dim=1)(logits_q / T)
+    epsilon = 1e-8
+    _p = (p + epsilon * torch.ones(b, c).cuda()) / (1.0 + c * epsilon)
+    _q = (q + epsilon * torch.ones(b, c).cuda()) / (1.0 + c * epsilon)
+    return (T ** 2) * torch.mean(torch.sum(_p * torch.log(_p / _q), dim=1))
+
+
 def main():
     opts = get_argparser().parse_args()
     if opts.dataset.lower() == 'voc':
@@ -264,11 +279,12 @@ def main():
     elif opts.dataset.lower() == 'trav':
         opts.num_classes = 2
 
-    # Setup visualization
-    vis = Visualizer(port=opts.vis_port,
-                     env=opts.vis_env) if opts.enable_vis else None
-    if vis is not None:  # display options
-        vis.vis_table("Options", vars(opts))
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="SegPGD",
+        # track hyperparameters and run metadata
+        config=opts
+    )
 
     os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -308,7 +324,7 @@ def main():
     # optimizer = torch.optim.SGD(params=model.parameters(), lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
     # torch.optim.lr_scheduler.StepLR(optimizer, step_size=opts.lr_decay_step, gamma=opts.lr_decay_factor)
     if opts.lr_policy == 'poly':
-        scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
+        scheduler = utils.PolyLR(optimizer, opts.epochs, power=0.9)
     elif opts.lr_policy == 'step':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=opts.step_size, gamma=0.1)
 
@@ -318,6 +334,8 @@ def main():
         criterion = utils.FocalLoss(ignore_index=255, size_average=True)
     elif opts.loss_type == 'cross_entropy':
         criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+    
+    mse_criterion = nn.MSELoss()
 
     def save_ckpt(path):
         """ save current model
@@ -358,9 +376,9 @@ def main():
         model.to(device)
 
     # ==========   Train Loop   ==========#
-    vis_sample_id = np.random.randint(0, len(val_loader), opts.vis_num_samples,
-                                      np.int32) if opts.enable_vis else None  # sample idxs for visualization
-    denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054], std=[0.2726, 0.2778, 0.2861])  # denormalization for ori images
+    # vis_sample_id = np.random.randint(0, len(val_loader), opts.vis_num_samples,
+    #                                   np.int32) if opts.enable_vis else None  # sample idxs for visualization
+    # denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054], std=[0.2726, 0.2778, 0.2861])  # denormalization for ori images
 
     print('\n[ Train epoch: %d ]' % opts.epochs)
     model.train()
@@ -368,51 +386,44 @@ def main():
     cur_itrs = 0
 
     for e in range(opts.epochs):
-        for i, (images, labels, filenames) in tqdm(enumerate(train_loader), desc=f'epoch: {e+1}/{opts.epochs}'):
+        progress_bar = tqdm(train_loader, desc=f"Epoch: {e}/{opts.epochs}")
+        for i, (images, labels, filenames) in enumerate(progress_bar):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
-
+            clean_outputs, clean_features = model(images)
             delta = attacks.pgd(model, images, labels, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
             x_adv = images.float() + delta.float()
-            adv_outputs = model(x_adv)
+            adv_outputs, adv_features = model(x_adv)
             loss = criterion(adv_outputs, labels)
-            loss.backward()
+            # h_loss = mse_criterion(adv_features['out'], clean_features['out'])
+            h_loss = kl_div_loss(adv_features['out'], clean_features['out'].detach(), 1)
+            total_loss = loss + h_loss
+            total_loss.backward()
 
             optimizer.step()
-            # train_loss += loss.item()
+            progress_bar.set_postfix({"total_loss": total_loss.item(), 'loss': loss.item(), 'h_loss': h_loss.item()})
+            wandb.log({"total_loss": total_loss.item(), 'loss': loss.item(), 'h_loss': h_loss.item()})
+        scheduler.step()
 
-            if e % opts.val_interval == 0:
-                # save_ckpt(f'checkpoints/latest_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth')
-                print("validation...")
-                model.eval()
-                val_score = validate(
-                    opts, model, val_loader, device, metrics, cur_itrs,
-                    False)
-                print(metrics.to_str(val_score))
-                if val_score['Mean IoU'] > best_score:  # save best model
-                    best_score = val_score['Mean IoU']
-                    save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
-                              (opts.model, opts.dataset, opts.output_stride))
+        if e % opts.val_interval == 0:
+            # save_ckpt(f'checkpoints/latest_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth')
+            print("validation...")
+            model.eval()
+            val_score = validate(
+                opts, model, val_loader, device, metrics, cur_itrs,
+                False)
+            wandb.log({'mIoU': val_score['Mean IoU']})
+            print(metrics.to_str(val_score))
+            if val_score['Mean IoU'] > best_score:  # save best model
+                best_score = val_score['Mean IoU']
+                save_ckpt('checkpoints/best_%s_%s_os%d.pt' %
+                            (opts.model, opts.dataset, opts.output_stride))
 
-                # if vis is not None:  # visualize validation score and samples
-                #     vis.vis_scalar("[Val] Overall Acc", cur_itrs, val_score['Overall Acc'])
-                #     vis.vis_scalar("[Val] Mean IoU", cur_itrs, val_score['Mean IoU'])
-                #     vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
-
-                #     for k, (img, target, lbl) in enumerate(ret_samples):
-                #         img = (denorm(img) * 255).astype(np.uint8)
-                #         target = train_dst.decode_target(target).transpose(2, 0, 1).astype(np.uint8)
-                #         lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
-                #         concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
-                #         vis.vis_image('Sample %d' % k, concat_img)
-                model.train()
-
+            model.train()
             cur_itrs += 1
-            scheduler.step()
-    
-    # if cur_itrs >= opts.total_itrs:
-    save_ckpt(f'checkpoints/AT_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth')
-    return
+
+    save_ckpt(f'checkpoints/hloss_{opts.model}_{opts.dataset}_os{opts.output_stride}_{date.today()}.pt')
+    wandb.finish()
 
 
 if __name__ == '__main__':
