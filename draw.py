@@ -13,6 +13,10 @@ import torch
 from pptx import Presentation
 from pptx.util import Inches
 
+# plt.rcParams.update({
+#     "text.usetex": True,
+#     "text.latex.preamble": r"\usepackage{amsfonts}"  # Load amsfonts package
+# })
 
 def tsne_hidden_layers():
     """
@@ -22,11 +26,11 @@ def tsne_hidden_layers():
     tsne = TSNE(n_components=2, perplexity=8, random_state=444)
     pca = PCA(n_components=10, random_state=444)
     labels = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16] # [1,2,1,2] or [1,2,3,4,1,2,3,4]
-    layers = ['low_level', 'layer2', 'layer3', 'out']
+    layers = ['low_level', 'out']  # 'layer2', 'layer3',
     files = os.listdir(f'results/hidden_layers')
     batchs = [int(re.match(r'\d+', filename).group()) for filename in files]
     for i in tqdm(range(0, max(batchs), 4), desc=f'batches'):
-        clean_features_1 = torch.load(f'results/hidden_layers/{i}_clean.pth')
+        clean_features_1 = torch.load(f'results/hidden_layers/{i}_clean.pth')  # 1 means batch_1
         adv_features_1 = torch.load(f'results/hidden_layers/{i}_adv.pth')
         clean_features_2 = torch.load(f'results/hidden_layers/{i+1}_clean.pth')
         adv_features_2 = torch.load(f'results/hidden_layers/{i+1}_adv.pth')
@@ -34,7 +38,7 @@ def tsne_hidden_layers():
         adv_features_3 = torch.load(f'results/hidden_layers/{i+2}_adv.pth')
         clean_features_4 = torch.load(f'results/hidden_layers/{i+3}_clean.pth')
         adv_features_4 = torch.load(f'results/hidden_layers/{i+3}_adv.pth')
-        fig, axes = plt.subplots(1,4,figsize=(14, 4))
+        fig, axes = plt.subplots(1,len(layers))  # ,figsize=(14, 4)
         for j, l in enumerate(layers):
             clean_li = clean_features_1[l]
             adv_li = adv_features_1[l]
@@ -45,20 +49,15 @@ def tsne_hidden_layers():
             clean_li_4 = clean_features_4[l]
             adv_li_4 = adv_features_4[l]
             cat_tensor = torch.cat(
-                (clean_li,clean_li_2,clean_li_3,clean_li_4,adv_li,adv_li_2,
-                 adv_li_3,adv_li_4), dim=0).detach().cpu().numpy()
+                (clean_li,clean_li_2,clean_li_3,clean_li_4,adv_li,adv_li_2,adv_li_3,adv_li_4), dim=0).detach().cpu().numpy()
             cat_tensor = cat_tensor.reshape(cat_tensor.shape[0], -1)
-            del clean_li, adv_li, clean_li_2, adv_li_2
+            del clean_li, adv_li
 
             cat_tensor = pca.fit_transform(cat_tensor)
             x_tsne = tsne.fit_transform(cat_tensor)
             df = pd.DataFrame(x_tsne, columns=["comp1", "comp2"])
             df["y"] = labels
-            # if j == 0:
-            #     sns_plot = sns.scatterplot(x="comp1", y="comp2", hue=df.y.tolist(),
-            #         palette=sns.color_palette("hls", cat_tensor.shape[0]),
-            #         data=df, ax=axes[j])
-            # else:
+
             sns_plot = sns.scatterplot(x="comp1", y="comp2", hue=df.y.tolist(),
                 palette=sns.color_palette("hls", cat_tensor.shape[0]//2),
                 data=df, ax=axes[j], legend=False)
@@ -67,7 +66,7 @@ def tsne_hidden_layers():
             axes[j].set_xlabel('')
             axes[j].set_ylabel('')
 
-        plt.savefig(f"results/visualize/t-SNE_{i}.png",bbox_inches='tight',pad_inches=0.1)
+        plt.savefig(f"results/visualize/t-SNE_{i}.png",bbox_inches='tight',pad_inches=0.13)
         plt.close(fig)
 
 
@@ -291,8 +290,92 @@ def selected_positive_negative():
     prs.save(f'results/selected_5_columns.pptx')
 
 
+def draw_qualitative_results():
+    """
+    3 positives: 80_2, 58_1, 92_3
+    1 negative: 75_1
+    clean image, adv image, perturbation, label
+    w/o defense, after AT, after AT+hloss
+    """
+    selected_images = ['80_2', '58_1', '91_3', '75_1']
+    fig, axs = plt.subplots(8, 4, figsize=(6.5, 10))  # figsize=(15, 6)
+    reorder = {
+        '85_3':'132','21_0':'132','6_1':'132','80_2':'312','82_0':'312',
+        '101_3':'132','115_3':'132','16_3':'132','75_3':'132','72_3':'132',
+        '91_3':'132','0_0':'132','121_0':'132','85_0':'132','91_0':'132',
+        '81_0':'132','24_3':'132'}
+    for i, pre in enumerate(selected_images):
+        x_clean = plt.imread(f'results/qualitative_results/{pre}_x_clean.png')
+        x_adv = plt.imread(f'results/qualitative_results/{pre}_x_adv.png')
+        label = plt.imread(f'results/qualitative_results/{pre}_y_true.png')
+        delta = plt.imread(f'results/qualitative_results/{pre}_delta.png')
+        before = os.path.join('results/before_AT', f'{pre}_adv_y_pred.png')  # w/o defense
+        after = os.path.join('results/after', f'robust_{pre}_adv_y_pred.png')  # AT
+        hloss = os.path.join('results/hloss', f'hloss_{pre}_adv_y_pred.png')  # AT+hloss
+        four_images = [before, after, hloss]  # hloss_clean
+        if pre in reorder:
+            three_images = [four_images[int(x) - 1] for x in reorder[pre]]
+        else:
+            three_images = four_images
+        
+        before_img = plt.imread(three_images[0])  # w/o defense
+        after_img = plt.imread(three_images[1])
+        hloss_img = plt.imread(three_images[2])
+        axs[2*i, 0].imshow(x_clean)
+        axs[2*i, 0].axis('off')
+        axs[2*i, 1].imshow(x_adv)
+        axs[2*i, 1].axis('off')
+        axs[2*i, 2].imshow(label)
+        axs[2*i, 2].axis('off')
+        axs[2*i, 3].imshow(delta)
+        axs[2*i, 3].axis('off')
+        
+
+        axs[2*i+1, 0].imshow(before_img)
+        axs[2*i+1, 0].axis('off')
+        axs[2*i+1, 1].imshow(after_img)
+        axs[2*i+1, 1].axis('off')
+        axs[2*i+1, 2].imshow(hloss_img)
+        axs[2*i+1, 2].axis('off')
+        axs[2*i+1, 3].axis('off')
+
+        if i == 0:
+            font = 9
+            y = -0.2
+            axs[2*i, 0].set_title(f'a', y=y, fontsize=font)
+            axs[2*i, 1].set_title(f'b', y=y,fontsize=font)
+            axs[2*i, 2].set_title(f'c', y=y,fontsize=font)
+            axs[2*i, 3].set_title(f'd', y=y,fontsize=font)
+            axs[2*i+1, 0].set_title(f'e', y=y,fontsize=font)
+            axs[2*i+1, 1].set_title(f'f', y=y,fontsize=font)
+            axs[2*i+1, 2].set_title(f'g', y=y,fontsize=font)
+    
+    img_filename = f'results/qualitative_results/qualitative.png'
+    plt.tight_layout()
+    fig.savefig(img_filename, bbox_inches='tight', pad_inches=0)
+    plt.close()
+
+
+def increasing_perturbations():
+    epsilons = [0.005, 0.05, 0.1, 0.2, 0.3]
+    fig, axs = plt.subplots(1, 5, figsize=(15, 5))
+    for i, eps in enumerate(epsilons):
+        img = plt.imread(f'results/clean/80_2_x_adv_{eps}.png')
+        axs[i].imshow(img)
+        axs[i].set_title(f'{eps}', y=-0.15,fontsize=19)
+        axs[i].axis('off')
+    
+    img_filename = f'results/clean/epsilons.png'
+    fig.suptitle('Epsilons', y=0.17,fontsize=19)
+    plt.tight_layout()
+    fig.savefig(img_filename, bbox_inches='tight', pad_inches=0)
+    plt.close()
+
+
 if __name__ == '__main__':
     # tsne_hidden_layers()
     # compare_before_after_masks()
     # prepare_5_columns()
-    selected_positive_negative()
+    # selected_positive_negative()
+    draw_qualitative_results()
+    # increasing_perturbations()

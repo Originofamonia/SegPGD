@@ -768,17 +768,7 @@ def save_separate_images(split='val'):
         delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
         x_adv = x_clean.float() + delta1.float()
         y_pred_adv, _ = model(x_adv)
-        # for k, v in clean_features.items():
-        #     clean_features[k] = v.detach().cpu().numpy()
 
-        # for k, v in adv_features.items():
-        #     adv_features[k] = v.detach().cpu().numpy()
-
-        # np.savez(f'results/hidden_layers/{i}_clean.npz', **clean_features)  # no, didn't save space
-        # np.savez(f'results/hidden_layers/{i}_adv.npz', **adv_features)
-        # torch.save(clean_features, f'results/hidden_layers/{i}_clean.pth')
-        # torch.save(adv_features, f'results/hidden_layers/{i}_adv.pth')
-        # continue
         y_pred_adv_np = y_pred_adv.detach().max(dim=1)[1].cpu().numpy()
         y_true_np = y_true.detach().cpu().numpy()
         y_pred_clean_np = y_pred_clean.detach().max(dim=1)[1].cpu().numpy()
@@ -823,9 +813,172 @@ def save_separate_images(split='val'):
 
                 img_id += 1
 
-    return  # ret_samples
+    return
+
+
+def increasing_perturbations(split='val'):
+    """
+    generate perturbed images with eps=[0.005, 0.05, 0.1, 0.2, 0.3] and alpha=100
+    """
+    model_type = f'clean'  # or clean
+    opts = get_argparser().parse_args()
+    if opts.dataset.lower() == 'trav':
+        opts.num_classes = 2
+    
+    os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Device: {opts.gpu_id}")
+
+    train_dst, val_dst = get_dataset(opts)
+    if split == 'train':
+        loader = data.DataLoader(
+            train_dst, batch_size=opts.batch_size, shuffle=True, num_workers=2,
+            drop_last=True)  # drop_last=True to ignore single-image batches.
+    else:
+        loader = data.DataLoader(
+            val_dst, batch_size=opts.val_batch_size, shuffle=False, num_workers=2)
+    print(f"Dataset: {opts.dataset}, Train set: {len(train_dst)}, Val set: {len(val_dst)}")
+
+    model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
+    utils.set_bn_momentum(model.backbone, momentum=0.01)
+    checkpoint = torch.load(f'checkpoints/{model_type}_{opts.model}_{opts.dataset}_os{opts.output_stride}.pt', map_location=torch.device('cpu'))
+    model.load_state_dict(checkpoint["model_state"])
+    model = nn.DataParallel(model)
+    model.to(device)
+    model.eval()
+
+    # from validate fn
+    if opts.save_val_results:
+        if not os.path.exists(f'results/{model_type}'):
+            os.mkdir(f'results/{model_type}')
+        denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054],
+                                   std=[0.2726, 0.2778, 0.2861])
+        img_id = 0
+
+    epsilons = [0.005,0.01, 0.05, 0.1]
+
+    for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader), desc=f'batches'):
+        if i == 107:
+            x_clean = x_clean.to(device, dtype=torch.float32)
+            y_true = y_true.to(device, dtype=torch.uint8)
+
+            # y_pred_clean, clean_features = model(x_clean)
+            for eps in epsilons:
+                delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=eps, alpha=opts.alpha, num_iter=10)
+                x_adv = x_clean.float() + delta1.float()
+                # y_pred_adv, adv_features = model(x_adv)
+
+                # y_pred_adv_np = y_pred_adv.detach().max(dim=1)[1].cpu().numpy()
+                # y_true_np = y_true.detach().cpu().numpy()
+                # y_pred_clean_np = y_pred_clean.detach().max(dim=1)[1].cpu().numpy()
+
+                if opts.save_val_results:
+                    for j in range(len(x_clean)):
+                        image = x_clean[j].detach().cpu().numpy()
+
+                        adversarial_img = x_adv[j].detach().cpu().numpy()
+                        image = (denorm(image) * 255).transpose(1, 2, 0).astype(np.uint8)
+                        adversarial_img = (denorm(adversarial_img) * 255).transpose(1, 2, 0).astype(np.uint8)
+
+                        plt.imsave(f'results/{model_type}/{i}_{j}_x_adv_{eps}.png', adversarial_img)
+
+                        img_id += 1
+
+    return
+
+
+def save_qualitative_results(split='val'):
+    """
+    3 positives: 80_2, 58_1, 92_3
+    1 negative: 75_1
+    save separate images: clean image, adv image, perturbation, label
+    (before defense, after AT, after AT+hloss) existed, no need
+    """
+    model_type = f'hloss'  # or clean
+    opts = get_argparser().parse_args()
+    if opts.dataset.lower() == 'trav':
+        opts.num_classes = 2
+    
+    os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Device: {opts.gpu_id}")
+
+    train_dst, val_dst = get_dataset(opts)
+    if split == 'train':
+        loader = data.DataLoader(
+            train_dst, batch_size=opts.batch_size, shuffle=True, num_workers=2,
+            drop_last=True)  # drop_last=True to ignore single-image batches.
+    else:
+        loader = data.DataLoader(
+            val_dst, batch_size=opts.val_batch_size, shuffle=False, num_workers=2)
+    print(f"Dataset: {opts.dataset}, Train set: {len(train_dst)}, Val set: {len(val_dst)}")
+
+    model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
+    utils.set_bn_momentum(model.backbone, momentum=0.01)
+    checkpoint = torch.load(f'checkpoints/{model_type}_{opts.model}_{opts.dataset}_os{opts.output_stride}.pt', map_location=torch.device('cpu'))
+    model.load_state_dict(checkpoint["model_state"])
+    model = nn.DataParallel(model)
+    model.to(device)
+    model.eval()
+
+    # from validate fn
+    if opts.save_val_results:
+        if not os.path.exists(f'results/{model_type}'):
+            os.mkdir(f'results/{model_type}')
+        denorm = utils.Denormalize(mean=[0.5174, 0.4857, 0.5054],
+                                   std=[0.2726, 0.2778, 0.2861])
+        img_id = 0
+
+    selected_images = ['0_0']  # '80_2', '58_1', '91_3', '75_1'
+    fig, axs = plt.subplots(8, 4)  # figsize=(15, 6)
+    for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader), desc=f'batches'):
+        x_clean = x_clean.to(device, dtype=torch.float32)
+        y_true = y_true.to(device, dtype=torch.uint8)
+
+        y_pred_clean, _ = model(x_clean)
+
+        delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
+        x_adv = x_clean.float() + delta1.float()
+        y_pred_adv, _ = model(x_adv)
+
+        y_pred_adv_np = y_pred_adv.detach().max(dim=1)[1].cpu().numpy()
+        y_true_np = y_true.detach().cpu().numpy()
+        y_pred_clean_np = y_pred_clean.detach().max(dim=1)[1].cpu().numpy()
+
+        if opts.save_val_results:
+            for j in range(len(x_clean)):
+                if f'{i}_{j}' in selected_images:
+                    image = x_clean[j].detach().cpu().numpy()
+                    delta_np = np.sum(np.abs(delta1[j].detach().cpu().numpy()), axis=0)
+                    target = y_true_np[j]  # y_true
+                    pred = y_pred_adv_np[j]  # adv y_pred
+                    output = y_pred_clean_np[j]  # clean y_pred
+
+                    adversarial_img = x_adv[j].detach().cpu().numpy()
+                    image = (denorm(image) * 255).transpose(1, 2, 0).astype(np.uint8)
+                    adversarial_img = (denorm(adversarial_img) * 255).transpose(1, 2, 0).astype(np.uint8)
+
+                    plt.imsave(f'results/qualitative_results/{i}_{j}_x_clean.png', image)
+
+                    plt.imsave(f'results/qualitative_results/{i}_{j}_x_adv.png', adversarial_img)
+
+                    fig, ax = plt.subplots()
+                    ax.imshow(image)
+                    ax.imshow(target, cmap='viridis', alpha=0.4)
+                    ax.axis('off')
+                    fig.savefig(f'results/qualitative_results/{i}_{j}_y_true.png',bbox_inches='tight', pad_inches=0)
+                    plt.close(fig)
+
+                    fig, ax = plt.subplots()
+                    ax.imshow(delta_np, cmap='viridis')
+                    ax.axis('off')
+                    fig.savefig(f'results/qualitative_results/{i}_{j}_delta.png',bbox_inches='tight', pad_inches=0)
+                    plt.close(fig)
+
 
 if __name__ == '__main__':
     # main()
     # inference()
-    save_separate_images()
+    # save_separate_images()
+    # increasing_perturbations()
+    save_qualitative_results()
