@@ -79,12 +79,14 @@ def get_argparser():
     parser.add_argument("--ckpt", default='checkpoints/last_deeplabv3plus_resnet101_trav_os16.pth',
                         type=str, help="restore from checkpoint")
     parser.add_argument("--continue_training", action='store_true', default=False)
-    parser.add_argument("--eps", type=float, default=0.005,
+    parser.add_argument("--eps", type=float, default=0.01,
                         help="PGD attack epsilon")
-    parser.add_argument("--alpha", type=float, default=100.0,
+    parser.add_argument("--alpha", type=float, default=10.0,
                         help="PGD attack alpha")
+    parser.add_argument("--pgd_iter", type=int, default=100,
+                        help="PGD attack iterations")
     parser.add_argument("--loss_type", type=str, default='cross_entropy',
-                        choices=['cross_entropy', 'focal_loss'], help="loss type (default: False)")
+                        choices=['cross_entropy', 'focal_loss'], help="loss type (default: cross_entropy)")
     parser.add_argument("--gpu_id", type=str, default='0,1',
                         help="GPU ID")
     parser.add_argument("--weight_decay", type=float, default=1e-4,
@@ -161,8 +163,8 @@ def validate(opts, model, loader, device, metrics, epoch, clean=False):
     width = Inches(14.0)
     height = Inches(1.2)
     # df = pd.DataFrame(columns=['image_id', 'eps', 'alpha', 'effect'])
-
-    for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader)):
+    progress_bar = tqdm(loader)
+    for i, (x_clean, y_true, filenames) in enumerate(progress_bar):
         x_clean = x_clean.to(device, dtype=torch.float32)
         y_true = y_true.to(device, dtype=torch.uint8)
         
@@ -170,7 +172,7 @@ def validate(opts, model, loader, device, metrics, epoch, clean=False):
         if clean:
             delta1 = torch.zeros_like(x_clean)
         else:
-            delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
+            delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=opts.pgd_iter)
 
         x_adv = x_clean.float() + delta1.float()
         y_pred_adv, _ = model(x_adv)
@@ -249,6 +251,8 @@ def validate(opts, model, loader, device, metrics, epoch, clean=False):
                 # new_df = pd.DataFrame({'image_id': right_filename, 'eps': eps, 'alpha': alfa, 'effect': effect}, index=[1])
                 # df = pd.concat([df, new_df], ignore_index=True)
                 img_id += 1
+
+        progress_bar.set_description(f'{i}/{len(loader)}')
 
     score = metrics.get_results()
     print(f'iter: {epoch}; {score}')
@@ -391,7 +395,7 @@ def main():
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             clean_outputs, clean_features = model(images)
-            delta = attacks.pgd(model, images, labels, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
+            delta = attacks.pgd(model, images, labels, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=opts.pgd_iter)
             x_adv = images.float() + delta.float()
             adv_outputs, adv_features = model(x_adv)
             loss = criterion(adv_outputs, labels)
@@ -405,7 +409,7 @@ def main():
             wandb.log({"total_loss": total_loss.item(), 'loss': loss.item(), 'h_loss': h_loss.item()})
         scheduler.step()
 
-        if e % opts.val_interval == 0:
+        if e+1 % opts.val_interval == 0:
             # save_ckpt(f'checkpoints/latest_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth')
             print("validation...")
             model.eval()
@@ -422,6 +426,11 @@ def main():
             model.train()
             cur_itrs += 1
 
+    val_score = validate(
+        opts, model, val_loader, device, metrics, cur_itrs,
+        False)
+    wandb.log({'mIoU': val_score['Mean IoU']})
+    print(metrics.to_str(val_score))
     save_ckpt(f'checkpoints/hloss_{opts.model}_{opts.dataset}_os{opts.output_stride}_{date.today()}.pt')
     wandb.finish()
 

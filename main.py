@@ -183,99 +183,16 @@ def validate(opts, model, loader, device, metrics, iter, ret_samples_ids=None):
             new_labels=Variable(labels, requires_grad=False)
 
             outputs = model(new_images)
-#            criterion = utils.FocalLoss(ignore_index=255, size_average=True)
 
-            # torch.Size([4, 513, 513])    
-            # according to the       
-            #   st
-            # mask = new_labels == 15
-            # mask = mask.int()
-            # np_mask = torch.unsqueeze(mask,1)
-            #   ed
-            # TODO how to get mask with the output?
-            # print(outputs.shape)
-            # print(new_labels.shape)
-            # print(mask.shape)
-            # print(mask[1,:,:][100])
-            # plt.imshow(mask[1,:,:].cpu())
-            # plt.show()
-            # torch.Size([4, 21, 513, 513])
-
-            # mask = outputs == 15
-            # mask = mask.int()
-            # mask = torch.max(mask,1).values
-            # np_mask = torch.unsqueeze(mask,1)
-            
-            
-            # print(np_mask.shape)
-# =============================================================================
-            # loss = criterion(outputs*(~np_mask), new_labels*(~mask)) + criterion(outputs*np_mask, new_labels*mask) 
-            # loss_1 = criterion(outputs*(~ np_mask), new_labels*(~mask))
-            #   st
-
-
-            # loss_1 = criterion(outputs*(1 - np_mask), new_labels*(1 - mask))
-            
-            # print(((outputs * np_mask).shape))
-            
-            # print((new_labels.shape))
-
-            # loss_2 = criterion(outputs * np_mask, new_labels*0)
-            # t_loss = loss_1 + loss_2
-            #   ed
-            # print(t_loss)
             loss = criterion(outputs, new_labels)
-               # Zero all existing gradients
+
             model.zero_grad()
    
-               # Calculate gradients of model in backward pass
-            # t_loss.backward()
+            # Calculate gradients of model in backward pass
             loss.backward()     
-               # Collect datagrad
- ##            print(images.grad)
- #            sign_data_grad = torch.autograd.grad(loss, new_images,
- #                                       retain_graph=False, create_graph=False)[0]
- #            data_grad = new_images.grad.data
- #            sign_data_grad = torch.sign(data_grad)
-   
-               # Call FGSM Attack
-               
-            # TODO allocate the 1abel 15
-            # TODO set up SegPGD
-            # TODO turn to label not 15
-            # TODO turn to label 0
-            # adversarial_x = attacks.fgsm(images, new_images, 0.005)
-            #
-            # adversarial_x = attacks.t_fgsm_2(images, new_images, 4/255)
+
             adversarial_x = attacks.segpgd(images,new_images,new_labels,0.005,model)
-            #
-            # print(adversarial_x[1,1,:,:][2][100])
-            # plt.imshow(adversarial_x[1,1,:,:].cpu())
-            # plt.show()
-            # adversarial_x = adversarial_x 
-            # print(mask[1,:,:][100])
-            # plt.imshow(mask[1,:,:].cpu())
-            # plt.show()
-            # print(np_mask.shape)
-            # print(np_mask[0,0,:,:][200])
-            # plt.imshow(np_mask[0,0,:,:].cpu())
-            # plt.show()
-#  new attack -> on the loss of the 
-
-
-#            adversarial_x = attacks.pgd(images,new_images,new_labels,0.001,model)
-               
-               
- #            adversarial_x = images + 0.001 * sign_data_grad.sign_()
- #            adversarial_x = new_images + (0.005 * sign_data_grad)
-             
- #            adversarial_y = new_images + 0.000000001 * sign_data_grad
-     # Adding clipping to maintain [0,1] range
- #            adversarial_x = torch.clamp(adversarial_x, 0, 1)
- #            adversarial_y = torch.clamp(adversarial_y, 0, 1)
- #            adversarial_x = sign_data_grad
-   
-               # Re-classify the perturbed image
+            
             new_output = model(adversarial_x)
              
             preds = new_output.detach().max(dim=1)[1].cpu().numpy()
@@ -451,67 +368,19 @@ def main():
         # =====  Train  =====
         model.train()
         cur_epochs += 1
-# =============================================================================
-#         #s
-#         torch.set_grad_enabled(True) 
-#         #e
-# =============================================================================
+
         for (images, labels) in train_loader:
             cur_itrs += 1
 
             images = images.to(device, dtype=torch.float32)
             labels = labels.to(device, dtype=torch.long)
             
-# =============================================================================
-#             # s
-#             new_images=Variable(images, requires_grad=True)
-#             new_labels=Variable(labels, requires_grad=False)
-#             # e
-# =============================================================================
-            
             optimizer.zero_grad()
-#            outputs = model(new_images)
             
-            # s
-            
-# =============================================================================
-#             #
-#             new_images_d = new_images.detach()
-#             new_images_d.requires_grad_()
-#             with torch.enable_grad():
-#                 outputs_a = model(new_images_d)
-#                 loss_a = criterion(outputs_a, labels)
-#             data_grad = torch.autograd.grad(loss_a, [new_images_d])[0]
-#             adversarial_x = new_images_d.detach() + 0.005 * torch.sign(data_grad.detach())
-#             new_output = model(adversarial_x)
-#             #
-# =============================================================================
-            
-            # e
-            
-#            loss = criterion(new_output, labels)
-            
-            outputs = model(images)
-            
-#            loss_o.backward()
-            
-            # s
-            
-#            data_grad = torch.autograd.grad(loss_o, [new_images])[0]
-#            adversarial_x = attacks.fgsm(images, data_grad, 0.005)
-#            new_output = model(adversarial_x)
-# =============================================================================
-#             #
-#             lamb = 0.5
-#             loss = (1-lamb) * criterion(outputs, labels) + lamb * criterion(new_output, labels)
-#             #
-# =============================================================================
-            
+            outputs, _ = model(images)
             
             loss =  criterion(outputs, labels)
             loss.backward()
-            
-            # e
             
             optimizer.step()
 

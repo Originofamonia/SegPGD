@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import torch
 from pptx import Presentation
 from pptx.util import Inches
+import cv2
 
 # plt.rcParams.update({
 #     "text.usetex": True,
@@ -372,10 +373,89 @@ def increasing_perturbations():
     plt.close()
 
 
+def epsilon_barplot():
+    """
+    epsilon vs mIoU barplot
+    """
+    # Load the tips dataset
+    tips = sns.load_dataset('tips')
+    epsilons = [0.005, 0.01, 0.05, 0.1, 0.2]
+    miou_eps = [0.848, 0.865, 0.836, 0.815, 0.788]
+    data1 = {'epsilons': epsilons,
+            'mIoU': miou_eps}
+    df1 = pd.DataFrame(data1)
+
+    starting_point = 0.7
+    # Create a bar plot with multiple groups
+    sns_plot = sns.lineplot(x='epsilons', y='mIoU', data=df1, marker='.',markersize=13) # bottom=bottom_values
+    plt.ylim(starting_point)
+    plt.xlabel('Epsilons', fontsize=14)  # Change the font size as needed
+    plt.ylabel('mIoU', fontsize=14)  # Change the font size as needed
+    plt.xscale('log')
+    # Increase font size for x and y axis tick labels
+    plt.xticks(fontsize=12)  # Change the font size as needed
+    plt.yticks(fontsize=12)
+    plt.tight_layout()
+    sns_plot.figure.savefig(f"results/seaborn_plot.png",bbox_inches='tight', pad_inches=0.1)
+    plt.close()
+
+    lambdas = [0.001, 0.01, 0.1, 1, 10]
+    miou_lam = [0.835, 0.845, 0.864, 0.865, 0.35]
+    data2 = {'Lambda': [0.001, 0.01, 0.1, 1, 10],
+            'mIoU': [0.835, 0.845, 0.864, 0.865, 0.35]}
+    df2 = pd.DataFrame(data2)
+    starting_point = 0.3
+    sns_plot = sns.lineplot(x='Lambda', y='mIoU', data=df2, marker='.',markersize=13) # bottom=bottom_values
+    plt.ylim(starting_point)
+    plt.xlabel('Lambda', fontsize=14)  # Change the font size as needed
+    plt.ylabel('mIoU', fontsize=14)  # Change the font size as needed
+    plt.xscale('log')
+    # Increase font size for x and y axis tick labels
+    plt.xticks(fontsize=12)  # Change the font size as needed
+    plt.yticks(fontsize=12)
+    plt.tight_layout()
+    sns_plot.figure.savefig(f"results/lambda.png",bbox_inches='tight', pad_inches=0.1)
+
+    fig, ax1 = plt.subplots()
+    ax2 = ax1.twiny()
+    ax1.plot(epsilons, miou_eps, 'o-', color='orange')
+    ax2.plot(lambdas, miou_lam, 'x-', color='green')
+    plt.ylim(starting_point)
+    
+    ax1.set_xlabel('Epsilon', color='orange')
+    ax2.set_xlabel('Lambda', color='g')
+    ax1.set_ylabel('mIoU')
+    plt.xscale('log')
+    fig.savefig(f'results/qualitative_results/epsilon_lambda.png',bbox_inches='tight', pad_inches=0.1)
+    plt.close(fig)
+
+
+
+def blur_faces():
+    """
+    blur faces in images
+    """
+    # filename = f'results/before_AT/86_1_x_clean.png'
+    filename = f'results/before_AT/7_0_x_clean.png'
+    image = cv2.imread(filename)
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(30, 30))
+    for (x, y, w, h) in faces:
+        face = image[y:y+h, x:x+w]
+        face = cv2.GaussianBlur(face, (99, 99), 30)
+        image[y:y+face.shape[0], x:x+face.shape[1]] = face
+
+    # To save the result
+    cv2.imwrite(f'results/blur/blurred_image.jpg', image)
+
+
 if __name__ == '__main__':
     # tsne_hidden_layers()
     # compare_before_after_masks()
     # prepare_5_columns()
     # selected_positive_negative()
-    draw_qualitative_results()
+    # draw_qualitative_results()
     # increasing_perturbations()
+    epsilon_barplot()
+    # blur_faces()

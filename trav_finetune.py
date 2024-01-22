@@ -77,7 +77,7 @@ def get_argparser():
     parser.add_argument("--ckpt", default='checkpoints/best_deeplabv3plus_resnet101_cityscapes_os16.pth.tar',
                         type=str, help="restore from checkpoint")
     parser.add_argument("--continue_training", action='store_true', default=False)
-    parser.add_argument("--eps", type=float, default=0.005,
+    parser.add_argument("--eps", type=float, default=0.01,
                         help="PGD attack epsilon")
     parser.add_argument("--alpha", type=float, default=100.0,
                         help="PGD attack alpha")
@@ -495,7 +495,7 @@ def main():
 #             #
 # =============================================================================
 
-            loss =  criterion(outputs, labels)
+            loss = criterion(outputs[0], labels)
             loss.backward()
 
             optimizer.step()
@@ -929,7 +929,8 @@ def save_qualitative_results(split='val'):
                                    std=[0.2726, 0.2778, 0.2861])
         img_id = 0
 
-    selected_images = ['0_0']  # '80_2', '58_1', '91_3', '75_1'
+    # selected_images = ['0_0']  # '80_2', '58_1', '91_3', '75_1'
+    selected_images = ['7_0','14_2','39_2','79_0','86_1']
     fig, axs = plt.subplots(8, 4)  # figsize=(15, 6)
     for i, (x_clean, y_true, filenames) in tqdm(enumerate(loader), desc=f'batches'):
         x_clean = x_clean.to(device, dtype=torch.float32)
@@ -937,7 +938,7 @@ def save_qualitative_results(split='val'):
 
         y_pred_clean, _ = model(x_clean)
 
-        delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=10)
+        delta1 = attacks.pgd(model, x_clean, y_true, device, epsilon=opts.eps, alpha=opts.alpha, num_iter=20)
         x_adv = x_clean.float() + delta1.float()
         y_pred_adv, _ = model(x_adv)
 
@@ -977,8 +978,8 @@ def save_qualitative_results(split='val'):
 
 
 if __name__ == '__main__':
-    # main()
+    main()
     # inference()
     # save_separate_images()
     # increasing_perturbations()
-    save_qualitative_results()
+    # save_qualitative_results()
